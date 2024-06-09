@@ -204,8 +204,8 @@ class Movimentacao:
         # df_estoque.loc['Total'] = pd.Series(linha_total)
         # Alterar o valor da coluna 'team' na linha do total
         # df_estoque.loc['Total', 'produto'] = 'Total'
-
-        st.write(f'Custo acumulado do estoque é de **R$ {df_estoque['Custo Estocado'].sum()}**')
+        custo_estoque_parado = df_estoque['Custo Estocado'].sum()
+        st.write(f'Custo acumulado do estoque é de **R$ {custo_estoque_parado}**')
 
         df = df_estoque.rename(columns={'produto': 'Produto'}).drop(['preco'], axis=1)
         st.dataframe(df,
