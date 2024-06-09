@@ -219,5 +219,8 @@ class Movimentacao:
                                                                     },
                                                                     hide_index=True
                                                                     )
-        usuario = os.getenv('USER_EMAIL')
-        st.write(usuario)
+        # Get the user's email
+        user_email = st.experimental_user.email
+
+        # Display the user's email
+        st.write(f"Welcome, {user_email}!")
