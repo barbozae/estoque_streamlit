@@ -3,17 +3,21 @@ import time
 from datetime import datetime
 from sqlalchemy import text
 import pandas as pd
-import numpy as np
+from filtro import Filtros
 from compras import Compras
-import os
+
 
 class Movimentacao:
+    def __init__(self) -> None:
+        self.filtro = Filtros() 
+
     def widget_movimentacao(self):
+        
         with st.form(key='widget_movimentacao', clear_on_submit=True):
             self.nome_produto = st.selectbox(label='Nome do Produto', options=self.df_cadastro['produto'], placeholder='', index=None)
-            self.codigo_produto = st.text_input(label='Código do Produto')
             self.qtd_movimentacao = st.number_input(label='Quantidade', value=float('0.00'), step=1.00,
                                                 min_value=-1000.00, max_value=1000.00)
+            self.codigo_produto = st.text_input(label='Código do Produto')
             submit_button = st.form_submit_button(label='Salvar')
         self.ajuste_movimentacao = st.toggle(label='Ajuste Movimentação', help='Ative para ajustar valores inconsistentes')
 
@@ -22,8 +26,6 @@ class Movimentacao:
 
         if self.ajuste_movimentacao:
             st.write('**_:red[Atenção]_ :red[ajuste ativado]**')
-        # else:
-        #     st.write(':blue[Ajuste desativado]')
 
     def salvar_movimentacao(self):
         dt_atualizado = datetime.now().strftime("%Y/%m/%d, %H:%M:%S")
@@ -33,7 +35,8 @@ class Movimentacao:
             time.sleep(10)
             msg_lancamento.empty()
 
-        if self.nome_produto and self.qtd_movimentacao != 0:
+        # if self.nome_produto and self.qtd_movimentacao != 0:
+        if (self.nome_produto and self.qtd_movimentacao):
             self.conecta_mysql()
             query = text("SELECT c.ID_produto FROM cadastro_estoque c WHERE c.produto = :produto")
             result = self.session.execute(query, {'produto': self.nome_produto})
@@ -68,8 +71,8 @@ class Movimentacao:
             try:
                 self.conecta_mysql()
                 # Verificação se o produto existe no cadastro_estoque
-                query = text("SELECT c.ID_produto FROM cadastro_estoque c WHERE c.ID_produto = :ID_produto")
-                result = self.session.execute(query, {'ID_produto': self.codigo_produto})
+                query = text("SELECT c.ID_produto FROM cadastro_estoque c WHERE c.codigo_produto = :codigo_produto")
+                result = self.session.execute(query, {'codigo_produto': self.codigo_produto})
                 ID_produto = result.scalar()
 
                 if not ID_produto:
@@ -117,13 +120,28 @@ class Movimentacao:
     def dataframe_movimentacao(self):
         tabela = Compras.atualizar()
         df_movimentacao = tabela[2]
-
+        
         # Substituindo valores 0 e 1 para não e sim
         df_movimentacao['correcao'] = df_movimentacao['correcao'].replace({0: 'Não', 1: 'Sim'})
 
         # mesclando cadastro_estoque com movimentacao_estoque para pegar os nomes dos produtos
-        self.df_movimentacao = pd.merge(self.df_cadastro, df_movimentacao, left_on='ID_produto', right_on='ID_produto', how='right')
-        
+        self.df_movimentacao = pd.merge(self.df_cadastro, df_movimentacao, left_on='ID_produto', right_on='ID_produto', how='right')        
+
+        # Verificar se a lista 'self.filtro.varPeriodo' está vazia
+        if self.filtro.varProduto:
+            filtro_produto = self.df_movimentacao['produto'].isin(self.filtro.varProduto)
+        else:
+            filtro_produto = pd.Series([True] * len(self.df_movimentacao)) # se a lista estiver vazia, considera todos os valores como verdadeiros 
+        if self.filtro.varUnidade:
+            filtro_unidade = self.df_movimentacao['unidade'].isin(self.filtro.varUnidade)
+        else:
+            filtro_unidade = pd.Series([True] * len(self.df_movimentacao))
+
+        self.df_movimentacao = self.df_movimentacao[filtro_produto & filtro_unidade]
+
+        self.df_movimentacao['dt_atualizado_y'] = pd.to_datetime(self.df_movimentacao['dt_atualizado_y']).dt.strftime('%d/%m/%Y %H:%M:%S')
+        self.df_movimentacao['codigo_produto'] = self.df_movimentacao['codigo_produto'].astype(str)
+
         df = self.df_movimentacao.rename(columns={
             'ID_movimentacao': 'ID Movimentação',
             'movimentacao': 'Movimentação',
@@ -140,7 +158,11 @@ class Movimentacao:
         ordem_colunas = ['ID Movimentação', 'Produto', 'Código Produto', 'Movimentação', 'Correção', 'Unidade','Atualizado em:']
 
         df = df.reindex(columns=ordem_colunas)
-        st.dataframe(df, hide_index=True)
+        st.dataframe(df.style.apply(
+                                lambda x: ["background-color: green" if val == "Sim" else "" for val in x],
+                                subset=["Correção"]
+                                    ),
+                                    hide_index=True, use_container_width=True)
 
     def produtos_no_estoque(self):
         tabela = Compras.atualizar()
@@ -158,12 +180,8 @@ class Movimentacao:
         total_movimentacao = pd.merge(total_movimentacao, total_compras, on='produto')
 
         # Subtraindo quantidade comprada com quantidade retirada do estoque para ter o valor de estoque
-        # precisei usar numpy devido valores negativos na coluna de movimentação que o pandas não estava calculando corretamente
-        total_movimentacao['Qtde Estoque'] = total_movimentacao['qtd'].sub(
-                                                                        np.where(
-                                                                            total_movimentacao['movimentacao'] < 0,
-                                                                            total_movimentacao['movimentacao'] * -1,
-                                                                            total_movimentacao['movimentacao']))
+        total_movimentacao['Qtde Estoque'] = total_movimentacao['qtd'].add(total_movimentacao['movimentacao'])
+                                                            
         def status(row):
             qtd_min = row['qtd_min']
             qtd_max = row['qtd_max']
@@ -175,17 +193,26 @@ class Movimentacao:
             else:
                 status = '🟣'
             return status
-
+        
         total_movimentacao['Status'] = total_movimentacao.apply(status, axis=1)
         
         self.df_status_estoque = total_movimentacao.drop(['ID_produto', 'codigo_produto', 'unidade_y', 'movimentacao', 'qtd_min', 
                                                       'qtd', 'qtd_max', 'dt_atualizado'], axis=1)
+
         df = self.df_status_estoque.rename(columns={
                                                 'produto': 'Produto',
                                                 'unidade_x': 'Unidade',
                                                 'movimentacao': 'Movimentação'
                                                 })
-        st.dataframe(df, hide_index=True)
+        st.caption('Quantidade de produtos em estoque')
+        st.dataframe(df,
+                     column_config={
+                    'Status': st.column_config.Column(
+                    help='🔴 Estoque baixo 🔵 Estoque bom 🟣 Estoque alto',
+                    width='small',
+                    required=True)
+                    },
+                    hide_index=True)
 
     def custo_estoque(self):
         df = self.df_compra_estoque.groupby(['produto', 'preco'])['ID_compra'].max().reset_index()
@@ -204,9 +231,9 @@ class Movimentacao:
         # df_estoque.loc['Total'] = pd.Series(linha_total)
         # Alterar o valor da coluna 'team' na linha do total
         # df_estoque.loc['Total', 'produto'] = 'Total'
-        custo_estoque_parado = df_estoque['Custo Estocado'].sum()
-        st.write(f'Custo acumulado do estoque é de **R$ {custo_estoque_parado}**')
 
+        custo_estoque_parado = df_estoque['Custo Estocado'].sum()
+        st.caption('Custo total em estoque')
         df = df_estoque.rename(columns={'produto': 'Produto'}).drop(['preco'], axis=1)
         st.dataframe(df,
                     column_config={
@@ -219,8 +246,13 @@ class Movimentacao:
                                                                     },
                                                                     hide_index=True
                                                                     )
-        # Get the user's email
-        user_email = st.experimental_user.email
+        
+        st.write(f'Custo acumulado do estoque é de **R$ {custo_estoque_parado}**')
+        # usuario = os.getenv('USER_EMAIL')
+        # st.write(usuario)
 
-        # Display the user's email
-        st.write(f"Welcome, {user_email}!")
+        # Get the user's email
+        # user_email = st.experimental_user.email
+
+        # # Display the user's email
+        # st.write(f"Welcome, {user_email}!")

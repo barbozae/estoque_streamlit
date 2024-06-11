@@ -1,5 +1,6 @@
 import streamlit as st
 import time
+import pandas as pd
 from datetime import datetime
 from sqlalchemy import select, insert, Table, MetaData, Column, Integer, String, DateTime, Float
 from conexao import Conexao
@@ -27,12 +28,15 @@ class Cadastro:
 
     def salvar_cadastro(self):
         if self.produto == '':
-            st.error('Produto precisa ser informado!', icon="🚨")
+            st.error(':red[Produto] precisa ser informado!', icon="🚨")
         elif self.codigo_produto in (None, ''):
-            st.error('Definir código do produto!', icon="🚨")
-
-# TODO Inserir mensagem para o valor qtde max ficar menor que a qtde min
-
+            st.error('Definir :red[código do produto!]', icon="🚨")
+        elif self.qtd_min <= 0:
+            st.error(':red[Qtde Min] precisa ser maior que zero')
+        elif self.qtd_max < self.qtd_min:
+            st.error(':red[Qtde Max] tem que ser maior que Qtde Min')
+        elif self.codigo_produto <= 0:
+            st.error(':red[Código de barra] tem que ser maior que zero')
         else:            
             dt_atualizo = datetime.now().strftime("%Y/%m/%d, %H:%M:%S")
 
@@ -60,7 +64,7 @@ class Cadastro:
 
             try:
                 # Verificar se o nome do funcionário já existe na tabela
-                stmt_select = select(cadastro_table).where(cadastro_table.c.produto == self.produto)
+                stmt_select = select(cadastro_table).where(cadastro_table.c.produto == self.produto and cadastro_table.c.codigo_produto == self.codigo_produto)
                 resultado = self.session.execute(stmt_select)
                 existe_nome = resultado.fetchone() is not None
 
@@ -77,10 +81,14 @@ class Cadastro:
                     msg_lancamento.success("Lançamento Realizado com Sucesso!")
                     time.sleep(5)
                     msg_lancamento.empty()
-                    # fazer com que apos 5 segundos a mensagem de sucesso apague PENDENTE
+                    msg_lancamento.info('Não esqueça de limpar o código de barra.')
+                    time.sleep(5)
+                    msg_lancamento.empty()
                 else:
                     msg_lancamento = st.empty()
-                    msg_lancamento.error("Produto já cadastrada", icon="🚨")
+                    msg_lancamento.error("Produto já cadastrado", icon="🚨")
+                    time.sleep(5)
+                    msg_lancamento.empty()
                 
             except Exception as e:
                 # Em caso de erro, desfazer a transação
@@ -93,6 +101,20 @@ class Cadastro:
     
     def editar_cadastro(self):
         df = self.df_cadastro_estoque.copy()
+        
+        # Verificar se a lista 'self.filtro.varPeriodo' está vazia
+        if self.filtro.varProduto:
+            filtro_produto = df['produto'].isin(self.filtro.varProduto)
+        else:
+            filtro_produto = pd.Series([True] * len(df)) # se a lista estiver vazia, considera todos os valores como verdadeiros 
+
+        if self.filtro.varUnidade:
+            filtro_unidade = df['unidade'].isin(self.filtro.varUnidade)
+        else:
+            filtro_unidade = pd.Series([True] * len(df))
+
+        df = df[filtro_produto & filtro_unidade]
+
         col1, col2 = st.columns([0.75, 1.25])
         with col1:
             filtro_ID = st.multiselect(label='ID para edição', options=df['ID_produto'], placeholder='')
@@ -104,14 +126,16 @@ class Cadastro:
             filtro_codigo_produto = st.multiselect(label='Código do Produto', options=df['codigo_produto'], placeholder='')
             if filtro_codigo_produto:
                 df = df[df['codigo_produto'].isin(filtro_codigo_produto)]
-    
+
         with col2:
             # Bloquear algumas colunas da edição
             colunas_bloqueadas = {
+            'dt_atualizado': {'editable': False},
             'ID_produto': {'editable': False},
-            'dt_atualizado:': {'editable': False}
+            'produto': {'editable': False},
+            'codigo_produto': {'editable': False},
             }
-
+            df['dt_atualizado'] = pd.to_datetime(df['dt_atualizado']).dt.strftime('%d/%m/%Y %H:%M:%S')
             colunas_formatada = {
                     'ID_produto': st.column_config.NumberColumn('ID Produto', format='%d'),
                     'produto': st.column_config.TextColumn('Produto'),
@@ -119,13 +143,14 @@ class Cadastro:
                     'qtd_min': st.column_config.NumberColumn('Qtde Min', format='%d'),
                     'qtd_max': st.column_config.NumberColumn('Qtde Max', format='%d'),
                     'unidade': st.column_config.SelectboxColumn('Unidade', options=self.lista_unidade, required=True), 
-                    'dt_atualizado:':st.column_config.DatetimeColumn('Atualizado em:', format='DD/MM/YYYY- h:mm A')}
+                    'dt_atualizado:':st.column_config.DatetimeColumn('Atualizado em:', format='DD/MM/YYYY h:mm a')}
             
             # num_rows = 'dynamic' é um parametro para habilitar a inclusão de linhas
             # disabled = deixa as colunas ineditavel
             tabela_editavel = st.data_editor(df, 
                                                 disabled=colunas_bloqueadas, 
-                                                column_config=colunas_formatada, 
+                                                column_config=colunas_formatada,
+                                                use_container_width=True,
                                                 hide_index=True)
 
             def update_cadastro(df):
